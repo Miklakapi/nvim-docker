@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly DEMO_DIR=".demo"
+readonly PROJECT_NAME="nvim-docker-demo"
+
+create_directory() {
+    local path="$1"
+
+    mkdir -p "$path"
+}
+
+write_file() {
+    local path="$1"
+    local content="$2"
+
+    mkdir -p "$(dirname "$path")"
+    printf "%s\n" "$content" >"$path"
+}
+
+create_compose_file() {
+    write_file "$DEMO_DIR/compose.yml" "name: $PROJECT_NAME
+
+services:
+  node:
+    image: node:22-alpine
+    container_name: nvim-docker-demo-node
+    command: sh -c \"node -e 'console.log(\\\"node demo started\\\"); setInterval(() => console.log(new Date().toISOString() + \\\" node is alive\\\"), 20000)'\"
+    labels:
+      - \"nvim-docker.demo=true\"
+      - \"nvim-docker.service=node\"
+
+  logger:
+    image: alpine:latest
+    container_name: nvim-docker-demo-logger
+    command: sh -c \"while true; do echo \\\"\$(date -Iseconds) logger heartbeat\\\"; sleep 20; done\"
+    labels:
+      - \"nvim-docker.demo=true\"
+      - \"nvim-docker.service=logger\"
+
+  exiting:
+    image: alpine:latest
+    container_name: nvim-docker-demo-exiting
+    command: sh -c \"echo exiting intentionally; exit 0\"
+    labels:
+      - \"nvim-docker.demo=true\"
+      - \"nvim-docker.service=exiting\"
+
+  failing:
+    image: alpine:latest
+    container_name: nvim-docker-demo-failing
+    command: sh -c \"echo failing intentionally; exit 1\"
+    labels:
+      - \"nvim-docker.demo=true\"
+      - \"nvim-docker.service=failing\"
+"
+}
+
+create_demo_project() {
+    rm -rf "$DEMO_DIR"
+
+    create_directory "$DEMO_DIR"
+
+    create_compose_file
+}
+
+print_success_message() {
+    cat <<EOF
+Demo project created in $DEMO_DIR
+
+Next:
+  cd $DEMO_DIR
+  docker compose up -d
+  nvim .
+EOF
+}
+
+main() {
+    create_demo_project
+    print_success_message
+}
+
+main "$@"
