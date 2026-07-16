@@ -128,40 +128,101 @@ end
 
 ---@param value string
 ---@param maximum_width integer
+---@param ellipsis string
 ---@return string
-local function truncate(value, maximum_width)
+local function truncate(value, maximum_width, ellipsis)
     if vim.fn.strdisplaywidth(value) <= maximum_width then
         return value
     end
 
-    if maximum_width <= 1 then
-        return "…"
+    local ellipsis_width = vim.fn.strdisplaywidth(ellipsis)
+
+    if maximum_width <= ellipsis_width then
+        return vim.fn.strcharpart(ellipsis, 0, maximum_width)
     end
 
-    return vim.fn.strcharpart(value, 0, maximum_width - 1) .. "…"
+    return vim.fn.strcharpart(
+        value,
+        0,
+        maximum_width - ellipsis_width
+    ) .. ellipsis
 end
 
+---@param value string
+---@param width integer
+---@return string
+local function pad_right(value, width)
+    local padding = math.max(0, width - vim.fn.strdisplaywidth(value))
+
+    return value .. string.rep(" ", padding)
+end
+
+---@param mode "docker"|"compose"
+---@param config DockerConfig
+---@return string[]
+local function get_columns(mode, config)
+    if mode == "compose" then
+        return config.containers.compose_columns
+    end
+
+    return config.containers.docker_columns
+end
+
+---@param container DockerContainer
+---@param column string
+---@return string
+local function get_column_value(container, column)
+    local value = container[column]
+
+    if value == nil or value == "" then
+        return "-"
+    end
+
+    return tostring(value)
+end
+
+---@param columns string[]
+---@param widths DockerColumnWidthsConfig
+---@param ellipsis string
+---@param container DockerContainer|nil
+---@return string
+local function build_columns_line(columns, widths, ellipsis, container)
+    local values = {}
+
+    for _, column in ipairs(columns) do
+        local width = widths[column]
+
+        if width then
+            local value = column:upper()
+
+            if container then
+                value = get_column_value(container, column)
+            end
+
+            value = truncate(value, width, ellipsis)
+
+            table.insert(values, pad_right(value, width))
+        end
+    end
+
+    return table.concat(values, " ")
+end
+
+---@param mode "docker"|"compose"
 ---@param containers DockerContainer[]
----@param content_width integer
 ---@return string[]
 ---@return table[]
-local function build_container_lines(containers, content_width)
+local function build_container_lines(mode, containers)
     local config = Config.get()
+    local columns = get_columns(mode, config)
+    local widths = config.containers.column_widths
+    local ellipsis = config.containers.ellipsis
     local lines = {}
     local highlights = {}
 
-    local name_width = math.max(12, math.floor(content_width * 0.32))
-    local state_width = 10
-    local ports_width = math.max(8, content_width - name_width - state_width - 6)
-
     table.insert(
         lines,
-        string.format(
-            "  %-" .. name_width .. "s %-" .. state_width .. "s %s",
-            "NAME",
-            "STATE",
-            "PORTS"
-        )
+        "  " .. build_columns_line(columns, widths, ellipsis, nil)
     )
 
     if #containers == 0 then
@@ -175,24 +236,14 @@ local function build_container_lines(containers, content_width)
         local status_type = get_status_type(container)
         local icon = config.status_icons[status_type]
         local highlight = config.status_highlights[status_type]
-
-        local name = truncate(container.name, name_width)
-        local state = truncate(container.state, state_width)
-        local ports = truncate(
-            container.ports ~= "" and container.ports or "-",
-            ports_width
+        local columns_line = build_columns_line(
+            columns,
+            widths,
+            ellipsis,
+            container
         )
 
-        table.insert(
-            lines,
-            string.format(
-                "%s %-" .. name_width .. "s %-" .. state_width .. "s %s",
-                icon,
-                name,
-                state,
-                ports
-            )
-        )
+        table.insert(lines, icon .. " " .. columns_line)
 
         table.insert(highlights, {
             line = index,
@@ -392,8 +443,8 @@ function UI.open(mode, containers)
     close_when_focus_leaves()
 
     local container_lines, highlights = build_container_lines(
-        containers,
-        containers_width
+        mode,
+        containers
     )
 
     set_buffer_lines(buffers.containers, container_lines)
@@ -402,7 +453,7 @@ function UI.open(mode, containers)
         "  Select a container to view its logs.",
     })
     set_buffer_lines(buffers.footer, {
-        "  j/k move   Enter logs   s start   x stop   r restart   Tab switch panel   G follow logs   Esc/q close",
+        "  Enter logs   s start   x stop   r restart   Tab switch panel   G follow logs   Esc/q close",
     })
 
     apply_container_highlights(highlights)

@@ -23,9 +23,24 @@ local Config = {}
 ---@field failed string
 ---@field unknown string
 
+---@class DockerColumnWidthsConfig
+---@field name number
+---@field service number
+---@field image number
+---@field state number
+---@field status number
+---@field ports number
+
+---@class DockerContainersConfig
+---@field docker_columns string[]
+---@field compose_columns string[]
+---@field column_widths DockerColumnWidthsConfig
+---@field ellipsis string
+
 ---@class DockerConfig
 ---@field window DockerWindowConfig
 ---@field logs DockerLogsConfig
+---@field containers DockerContainersConfig
 ---@field status_icons DockerStatusIconsConfig
 ---@field status_highlights DockerStatusHighlightsConfig
 
@@ -34,11 +49,36 @@ local default_config = {
     window = {
         width = 0.9,
         height = 0.85,
-        containers_width = 0.35,
+        containers_width = 0.5,
     },
     logs = {
         tail = 200,
         auto_select = true,
+    },
+    containers = {
+        docker_columns = {
+            "name",
+            "image",
+            "state",
+            "status",
+            "ports",
+        },
+        compose_columns = {
+            "name",
+            "service",
+            "state",
+            "status",
+            "ports",
+        },
+        column_widths = {
+            name = 26,
+            service = 14,
+            image = 20,
+            state = 10,
+            status = 28,
+            ports = 24,
+        },
+        ellipsis = "…",
     },
     status_icons = {
         running = "●",
