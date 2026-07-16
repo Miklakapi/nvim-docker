@@ -179,6 +179,29 @@ local function fetch_containers(mode, callback)
     Docker.list_containers(callback)
 end
 
+---@param mode DockerMode
+---@return string[]
+---@return table
+local function build_events_command(mode)
+    if mode == "compose" then
+        return {
+            "docker",
+            "compose",
+            "events",
+            "--json",
+        }, {
+            cwd = vim.fn.getcwd(),
+        }
+    end
+
+    return {
+        "docker",
+        "events",
+        "--filter",
+        "type=container",
+    }, {}
+end
+
 ---@param callback DockerContainersCallback
 ---@return nil
 function Docker.list_containers(callback)
@@ -232,16 +255,25 @@ end
 ---@param callback DockerContainersCallback
 ---@return DockerWatchStop
 function Docker.watch_containers(mode, callback)
-    local timer = vim.uv.new_timer()
+    local debounce_timer = vim.uv.new_timer()
+    local event_process = nil
     local is_stopped = false
     local is_refreshing = false
+    local refresh_pending = false
 
     local function refresh()
-        if is_stopped or is_refreshing then
+        if is_stopped then
+            return
+        end
+
+        if is_refreshing then
+            refresh_pending = true
+
             return
         end
 
         is_refreshing = true
+        refresh_pending = false
 
         fetch_containers(mode, function(containers, error_message)
             is_refreshing = false
@@ -251,18 +283,69 @@ function Docker.watch_containers(mode, callback)
             end
 
             callback(containers, error_message)
+
+            if refresh_pending then
+                refresh()
+            end
         end)
     end
 
-    if not timer then
-        callback(nil, "Failed to create Docker watcher")
+    local function schedule_refresh()
+        if is_stopped or not debounce_timer then
+            return
+        end
+
+        debounce_timer:stop()
+        debounce_timer:start(200, 0, vim.schedule_wrap(refresh))
+    end
+
+    if not debounce_timer then
+        callback(nil, "Failed to create Docker events debounce timer")
 
         return function()
             is_stopped = true
         end
     end
 
-    timer:start(0, 2000, vim.schedule_wrap(refresh))
+    local command, options = build_events_command(mode)
+
+    options.text = true
+    options.stdout = function(error_message, data)
+        if is_stopped then
+            return
+        end
+
+        if error_message then
+            vim.schedule(function()
+                callback(nil, "Failed to read Docker events: " .. error_message)
+            end)
+
+            return
+        end
+
+        if data and data ~= "" then
+            vim.schedule(schedule_refresh)
+        end
+    end
+
+    refresh()
+
+    event_process = vim.system(command, options, function(result)
+        vim.schedule(function()
+            if is_stopped then
+                return
+            end
+
+            local error_message = vim.trim(result.stderr or "")
+
+            if error_message == "" then
+                error_message = "Docker events process stopped with exit code "
+                    .. result.code
+            end
+
+            callback(nil, error_message)
+        end)
+    end)
 
     return function()
         if is_stopped then
@@ -270,10 +353,16 @@ function Docker.watch_containers(mode, callback)
         end
 
         is_stopped = true
-        timer:stop()
 
-        if not timer:is_closing() then
-            timer:close()
+        debounce_timer:stop()
+
+        if not debounce_timer:is_closing() then
+            debounce_timer:close()
+        end
+
+        if event_process then
+            event_process:kill(15)
+            event_process = nil
         end
     end
 end
