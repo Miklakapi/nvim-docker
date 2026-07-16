@@ -2,11 +2,19 @@ local Config = require("docker.config")
 
 local UI = {}
 
+---@class DockerUIHandlers
+---@field on_select fun(container: DockerContainer)|nil
+---@field on_start fun(container: DockerContainer)|nil
+---@field on_stop fun(container: DockerContainer)|nil
+---@field on_restart fun(container: DockerContainer)|nil
+
 local highlight_namespace = vim.api.nvim_create_namespace("nvim-docker")
 local close_augroup = vim.api.nvim_create_augroup("NvimDockerClose", {
     clear = true,
 })
 local is_closing = false
+local current_containers = {}
+local current_handlers = {}
 
 local windows = {
     containers = nil,
@@ -29,6 +37,9 @@ local function reset_state()
     buffers.containers = nil
     buffers.logs = nil
     buffers.footer = nil
+
+    current_containers = {}
+    current_handlers = {}
 end
 
 ---@param window integer|nil
@@ -289,6 +300,79 @@ local function apply_container_highlights(highlights)
     end
 end
 
+---@return DockerContainer|nil
+local function get_container_under_cursor()
+    if not windows.containers
+        or not vim.api.nvim_win_is_valid(windows.containers)
+    then
+        return nil
+    end
+
+    local cursor = vim.api.nvim_win_get_cursor(windows.containers)
+    local container_index = cursor[1] - 1
+
+    if container_index < 1 then
+        return nil
+    end
+
+    return current_containers[container_index]
+end
+
+---@param container DockerContainer
+---@return nil
+local function show_container_details(container)
+    set_buffer_lines(buffers.logs, {
+        "",
+        "  Selected container",
+        "",
+        "  Name:    " .. get_column_value(container, "name"),
+        "  Service: " .. get_column_value(container, "service"),
+        "  Image:   " .. get_column_value(container, "image"),
+        "  State:   " .. get_column_value(container, "state"),
+        "  Status:  " .. get_column_value(container, "status"),
+        "  Ports:   " .. get_column_value(container, "ports"),
+        "  ID:      " .. get_column_value(container, "id"),
+        "",
+        "  Live logs will be displayed here.",
+    })
+end
+
+---@param handler_name "on_select"|"on_start"|"on_stop"|"on_restart"
+---@return nil
+local function run_container_handler(handler_name)
+    local container = get_container_under_cursor()
+
+    if not container then
+        return
+    end
+
+    if handler_name == "on_select" then
+        show_container_details(container)
+    end
+
+    local handler = current_handlers[handler_name]
+
+    if handler then
+        handler(container)
+    end
+end
+
+---@return nil
+local function focus_containers()
+    if windows.containers
+        and vim.api.nvim_win_is_valid(windows.containers)
+    then
+        vim.api.nvim_set_current_win(windows.containers)
+    end
+end
+
+---@return nil
+local function focus_logs()
+    if windows.logs and vim.api.nvim_win_is_valid(windows.logs) then
+        vim.api.nvim_set_current_win(windows.logs)
+    end
+end
+
 ---@return nil
 local function configure_windows()
     vim.wo[windows.containers].cursorline = true
@@ -324,10 +408,63 @@ local function set_close_keymap(buffer)
 end
 
 ---@return nil
+local function set_container_keymaps()
+    vim.keymap.set("n", "<Enter>", function()
+        run_container_handler("on_select")
+    end, {
+        buffer = buffers.containers,
+        silent = true,
+        desc = "Select Docker container",
+    })
+
+    vim.keymap.set("n", "s", function()
+        run_container_handler("on_start")
+    end, {
+        buffer = buffers.containers,
+        silent = true,
+        desc = "Start Docker container",
+    })
+
+    vim.keymap.set("n", "x", function()
+        run_container_handler("on_stop")
+    end, {
+        buffer = buffers.containers,
+        silent = true,
+        desc = "Stop Docker container",
+    })
+
+    vim.keymap.set("n", "r", function()
+        run_container_handler("on_restart")
+    end, {
+        buffer = buffers.containers,
+        silent = true,
+        desc = "Restart Docker container",
+    })
+
+    vim.keymap.set("n", "<Tab>", focus_logs, {
+        buffer = buffers.containers,
+        silent = true,
+        desc = "Focus Docker logs",
+    })
+end
+
+---@return nil
+local function set_logs_keymaps()
+    vim.keymap.set("n", "<Tab>", focus_containers, {
+        buffer = buffers.logs,
+        silent = true,
+        desc = "Focus Docker containers",
+    })
+end
+
+---@return nil
 local function set_keymaps()
     set_close_keymap(buffers.containers)
     set_close_keymap(buffers.logs)
     set_close_keymap(buffers.footer)
+
+    set_container_keymaps()
+    set_logs_keymaps()
 end
 
 ---@param window integer
@@ -369,11 +506,30 @@ local function close_when_focus_leaves()
     })
 end
 
+---@return nil
+local function keep_cursor_on_containers()
+    vim.api.nvim_create_autocmd("CursorMoved", {
+        group = close_augroup,
+        buffer = buffers.containers,
+        callback = function()
+            local cursor = vim.api.nvim_win_get_cursor(windows.containers)
+
+            if cursor[1] < 2 and #current_containers > 0 then
+                vim.api.nvim_win_set_cursor(windows.containers, { 2, cursor[2] })
+            end
+        end,
+    })
+end
+
 ---@param mode "docker"|"compose"
 ---@param containers DockerContainer[]
+---@param handlers DockerUIHandlers|nil
 ---@return nil
-function UI.open(mode, containers)
+function UI.open(mode, containers, handlers)
     UI.close()
+
+    current_containers = containers
+    current_handlers = handlers or {}
 
     local config = Config.get()
 
@@ -441,6 +597,7 @@ function UI.open(mode, containers)
     configure_windows()
     set_keymaps()
     close_when_focus_leaves()
+    keep_cursor_on_containers()
 
     local container_lines, highlights = build_container_lines(
         mode,
