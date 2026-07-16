@@ -1,26 +1,26 @@
-local M = {}
+local Config = require("docker.config")
+local UI = require("docker.ui")
 
-function M.open()
-    vim.cmd("botright 12split")
+local Docker = {}
 
-    local buffer = vim.api.nvim_create_buf(false, true)
+---@param user_config DockerConfig|nil
+---@return nil
+function Docker.setup(user_config)
+    Config.setup(user_config)
 
-    vim.api.nvim_win_set_buf(0, buffer)
-
-    vim.bo[buffer].buftype = "nofile"
-    vim.bo[buffer].bufhidden = "wipe"
-    vim.bo[buffer].swapfile = false
-    vim.bo[buffer].modifiable = true
-
-    vim.api.nvim_buf_set_lines(buffer, 0, -1, false, {
-        "nvim-docker",
-        "",
-        "This will be the main Docker panel.",
-        "",
-        "For now it is only a simple split buffer."
+    vim.api.nvim_create_user_command("Docker", function()
+        UI.open("docker")
+    end, {
+        desc = "Open Docker containers",
+        force = true,
     })
 
-    vim.bo[buffer].modifiable = false
+    vim.api.nvim_create_user_command("DockerCompose", function()
+        UI.open("compose")
+    end, {
+        desc = "Open Docker Compose project containers",
+        force = true,
+    })
 end
 
-return M
+return Docker
