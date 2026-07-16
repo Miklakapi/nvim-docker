@@ -6,12 +6,21 @@ local Docker = {}
 
 ---@param action string
 ---@param container DockerContainer
+---@param callback fun(container_id: string, callback: DockerActionCallback)
 ---@return nil
-local function notify_action(action, container)
-    vim.notify(
-        string.format("%s container: %s", action, container.name),
-        vim.log.levels.INFO
-    )
+local function run_action(action, container, callback)
+    callback(container.id, function(error_message)
+        if error_message then
+            vim.notify(error_message, vim.log.levels.ERROR)
+
+            return
+        end
+
+        vim.notify(
+            string.format("%s container: %s", action, container.name),
+            vim.log.levels.INFO
+        )
+    end)
 end
 
 ---@return DockerUIHandlers
@@ -25,15 +34,15 @@ local function create_ui_handlers()
         end,
 
         on_start = function(container)
-            notify_action("Start", container)
+            run_action("Started", container, DockerClient.start_container)
         end,
 
         on_stop = function(container)
-            notify_action("Stop", container)
+            run_action("Stopped", container, DockerClient.stop_container)
         end,
 
         on_restart = function(container)
-            notify_action("Restart", container)
+            run_action("Restarted", container, DockerClient.restart_container)
         end,
     }
 end

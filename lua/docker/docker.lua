@@ -11,6 +11,7 @@ local Docker = {}
 ---@field ports string
 
 ---@alias DockerContainersCallback fun(containers: DockerContainer[]|nil, error_message: string|nil)
+---@alias DockerActionCallback fun(error_message: string|nil)
 
 ---@param publishers table[]|nil
 ---@return string
@@ -129,6 +130,40 @@ local function execute_list_command(command, options, callback)
     end)
 end
 
+---@param action "start"|"stop"|"restart"
+---@param container_id string
+---@param callback DockerActionCallback
+---@return nil
+local function execute_container_action(action, container_id, callback)
+    vim.system({
+        "docker",
+        action,
+        container_id,
+    }, {
+        text = true,
+    }, function(result)
+        vim.schedule(function()
+            if result.code ~= 0 then
+                local error_message = vim.trim(result.stderr or "")
+
+                if error_message == "" then
+                    error_message = string.format(
+                        "Docker %s failed with exit code %d",
+                        action,
+                        result.code
+                    )
+                end
+
+                callback(error_message)
+
+                return
+            end
+
+            callback(nil)
+        end)
+    end)
+end
+
 ---@param callback DockerContainersCallback
 ---@return nil
 function Docker.list_containers(callback)
@@ -155,6 +190,27 @@ function Docker.list_compose_containers(callback)
     }, {
         cwd = vim.fn.getcwd(),
     }, callback)
+end
+
+---@param container_id string
+---@param callback DockerActionCallback
+---@return nil
+function Docker.start_container(container_id, callback)
+    execute_container_action("start", container_id, callback)
+end
+
+---@param container_id string
+---@param callback DockerActionCallback
+---@return nil
+function Docker.stop_container(container_id, callback)
+    execute_container_action("stop", container_id, callback)
+end
+
+---@param container_id string
+---@param callback DockerActionCallback
+---@return nil
+function Docker.restart_container(container_id, callback)
+    execute_container_action("restart", container_id, callback)
 end
 
 return Docker
