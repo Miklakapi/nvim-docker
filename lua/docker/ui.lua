@@ -3,6 +3,10 @@ local Config = require("docker.config")
 local UI = {}
 
 local highlight_namespace = vim.api.nvim_create_namespace("nvim-docker")
+local close_augroup = vim.api.nvim_create_augroup("NvimDockerClose", {
+    clear = true,
+})
+local is_closing = false
 
 local windows = {
     containers = nil,
@@ -37,11 +41,23 @@ end
 
 ---@return nil
 function UI.close()
+    if is_closing then
+        return
+    end
+
+    is_closing = true
+
+    vim.api.nvim_clear_autocmds({
+        group = close_augroup,
+    })
+
     close_window(windows.containers)
     close_window(windows.logs)
     close_window(windows.footer)
 
     reset_state()
+
+    is_closing = false
 end
 
 ---@return integer
@@ -245,12 +261,15 @@ end
 ---@param buffer integer
 ---@return nil
 local function set_close_keymap(buffer)
-    vim.keymap.set("n", "q", UI.close, {
+    local options = {
         buffer = buffer,
         silent = true,
         nowait = true,
         desc = "Close nvim-docker",
-    })
+    }
+
+    vim.keymap.set("n", "<Esc>", UI.close, options)
+    vim.keymap.set("n", "q", UI.close, options)
 end
 
 ---@return nil
@@ -258,6 +277,45 @@ local function set_keymaps()
     set_close_keymap(buffers.containers)
     set_close_keymap(buffers.logs)
     set_close_keymap(buffers.footer)
+end
+
+---@param window integer
+---@return boolean
+local function is_plugin_window(window)
+    return window == windows.containers
+        or window == windows.logs
+        or window == windows.footer
+end
+
+---@return nil
+local function close_when_focus_leaves()
+    vim.api.nvim_clear_autocmds({
+        group = close_augroup,
+    })
+
+    vim.api.nvim_create_autocmd("WinEnter", {
+        group = close_augroup,
+        callback = function()
+            vim.schedule(function()
+                local current_window = vim.api.nvim_get_current_win()
+
+                if not is_plugin_window(current_window) then
+                    UI.close()
+                end
+            end)
+        end,
+    })
+
+    vim.api.nvim_create_autocmd("WinClosed", {
+        group = close_augroup,
+        callback = function(event)
+            local closed_window = tonumber(event.match)
+
+            if closed_window and is_plugin_window(closed_window) then
+                vim.schedule(UI.close)
+            end
+        end,
+    })
 end
 
 ---@param mode "docker"|"compose"
@@ -331,6 +389,7 @@ function UI.open(mode, containers)
 
     configure_windows()
     set_keymaps()
+    close_when_focus_leaves()
 
     local container_lines, highlights = build_container_lines(
         containers,
@@ -343,7 +402,7 @@ function UI.open(mode, containers)
         "  Select a container to view its logs.",
     })
     set_buffer_lines(buffers.footer, {
-        "  j/k move   q close",
+        "  j/k move   Enter logs   s start   x stop   r restart   Tab switch panel   G follow logs   Esc/q close",
     })
 
     apply_container_highlights(highlights)
