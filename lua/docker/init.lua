@@ -4,6 +4,19 @@ local UI = require("docker.ui")
 
 local Docker = {}
 
+---@type DockerWatchStop|nil
+local stop_watching = nil
+
+---@return nil
+local function stop_container_watcher()
+    if not stop_watching then
+        return
+    end
+
+    stop_watching()
+    stop_watching = nil
+end
+
 ---@param action string
 ---@param container DockerContainer
 ---@param callback fun(container_id: string, callback: DockerActionCallback)
@@ -44,21 +57,48 @@ local function create_ui_handlers()
         on_restart = function(container)
             run_action("Restarted", container, DockerClient.restart_container)
         end,
+
+        on_close = function()
+            stop_container_watcher()
+        end,
     }
 end
 
----@param containers DockerContainer[]|nil
----@param error_message string|nil
----@param mode "docker"|"compose"
+---@param mode DockerMode
 ---@return nil
-local function open_ui(containers, error_message, mode)
-    if error_message then
-        vim.notify(error_message, vim.log.levels.ERROR)
+local function open_ui(mode)
+    stop_container_watcher()
 
-        return
-    end
+    local is_open = false
 
-    UI.open(mode, containers or {}, create_ui_handlers())
+    stop_watching = DockerClient.watch_containers(
+        mode,
+        function(containers, error_message)
+            if error_message then
+                vim.notify(error_message, vim.log.levels.ERROR)
+
+                if not is_open then
+                    stop_container_watcher()
+                end
+
+                return
+            end
+
+            if not is_open then
+                is_open = true
+
+                UI.open(
+                    mode,
+                    containers or {},
+                    create_ui_handlers()
+                )
+
+                return
+            end
+
+            UI.update_containers(containers or {})
+        end
+    )
 end
 
 ---@param user_config DockerConfig|nil
@@ -67,18 +107,14 @@ function Docker.setup(user_config)
     Config.setup(user_config)
 
     vim.api.nvim_create_user_command("Docker", function()
-        DockerClient.list_containers(function(containers, error_message)
-            open_ui(containers, error_message, "docker")
-        end)
+        open_ui("docker")
     end, {
         desc = "Open Docker containers",
         force = true,
     })
 
     vim.api.nvim_create_user_command("DockerCompose", function()
-        DockerClient.list_compose_containers(function(containers, error_message)
-            open_ui(containers, error_message, "compose")
-        end)
+        open_ui("compose")
     end, {
         desc = "Open Docker Compose project containers",
         force = true,

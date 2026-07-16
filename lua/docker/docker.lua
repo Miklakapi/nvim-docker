@@ -10,8 +10,10 @@ local Docker = {}
 ---@field health string
 ---@field ports string
 
+---@alias DockerMode "docker"|"compose"
 ---@alias DockerContainersCallback fun(containers: DockerContainer[]|nil, error_message: string|nil)
 ---@alias DockerActionCallback fun(error_message: string|nil)
+---@alias DockerWatchStop fun()
 
 ---@param publishers table[]|nil
 ---@return string
@@ -164,6 +166,19 @@ local function execute_container_action(action, container_id, callback)
     end)
 end
 
+---@param mode DockerMode
+---@param callback DockerContainersCallback
+---@return nil
+local function fetch_containers(mode, callback)
+    if mode == "compose" then
+        Docker.list_compose_containers(callback)
+
+        return
+    end
+
+    Docker.list_containers(callback)
+end
+
 ---@param callback DockerContainersCallback
 ---@return nil
 function Docker.list_containers(callback)
@@ -211,6 +226,56 @@ end
 ---@return nil
 function Docker.restart_container(container_id, callback)
     execute_container_action("restart", container_id, callback)
+end
+
+---@param mode DockerMode
+---@param callback DockerContainersCallback
+---@return DockerWatchStop
+function Docker.watch_containers(mode, callback)
+    local timer = vim.uv.new_timer()
+    local is_stopped = false
+    local is_refreshing = false
+
+    local function refresh()
+        if is_stopped or is_refreshing then
+            return
+        end
+
+        is_refreshing = true
+
+        fetch_containers(mode, function(containers, error_message)
+            is_refreshing = false
+
+            if is_stopped then
+                return
+            end
+
+            callback(containers, error_message)
+        end)
+    end
+
+    if not timer then
+        callback(nil, "Failed to create Docker watcher")
+
+        return function()
+            is_stopped = true
+        end
+    end
+
+    timer:start(0, 2000, vim.schedule_wrap(refresh))
+
+    return function()
+        if is_stopped then
+            return
+        end
+
+        is_stopped = true
+        timer:stop()
+
+        if not timer:is_closing() then
+            timer:close()
+        end
+    end
 end
 
 return Docker

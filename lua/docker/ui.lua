@@ -7,14 +7,17 @@ local UI = {}
 ---@field on_start fun(container: DockerContainer)|nil
 ---@field on_stop fun(container: DockerContainer)|nil
 ---@field on_restart fun(container: DockerContainer)|nil
+---@field on_close fun()|nil
 
 local highlight_namespace = vim.api.nvim_create_namespace("nvim-docker")
 local close_augroup = vim.api.nvim_create_augroup("NvimDockerClose", {
     clear = true,
 })
 local is_closing = false
+local current_mode = nil
 local current_containers = {}
 local current_handlers = {}
+local previous_guicursor = nil
 
 local windows = {
     containers = nil,
@@ -38,6 +41,7 @@ local function reset_state()
     buffers.logs = nil
     buffers.footer = nil
 
+    current_mode = nil
     current_containers = {}
     current_handlers = {}
 end
@@ -62,11 +66,22 @@ function UI.close()
         group = close_augroup,
     })
 
+    local on_close = current_handlers.on_close
+
     close_window(windows.containers)
     close_window(windows.logs)
     close_window(windows.footer)
 
+    if previous_guicursor then
+        vim.o.guicursor = previous_guicursor
+        previous_guicursor = nil
+    end
+
     reset_state()
+
+    if on_close then
+        on_close()
+    end
 
     is_closing = false
 end
@@ -521,6 +536,62 @@ local function keep_cursor_on_containers()
     })
 end
 
+---@param containers DockerContainer[]
+---@return nil
+function UI.update_containers(containers)
+    if not current_mode
+        or not buffers.containers
+        or not vim.api.nvim_buf_is_valid(buffers.containers)
+        or not windows.containers
+        or not vim.api.nvim_win_is_valid(windows.containers)
+    then
+        return
+    end
+
+    local selected_container = get_container_under_cursor()
+    local selected_container_id = selected_container and selected_container.id or nil
+    local current_cursor = vim.api.nvim_win_get_cursor(windows.containers)
+    local current_index = math.max(1, current_cursor[1] - 1)
+
+    current_containers = containers
+
+    local container_lines, highlights = build_container_lines(
+        current_mode,
+        current_containers
+    )
+
+    set_buffer_lines(buffers.containers, container_lines)
+    apply_container_highlights(highlights)
+
+    if #current_containers == 0 then
+        vim.api.nvim_win_set_cursor(windows.containers, { 1, 0 })
+
+        return
+    end
+
+    local selected_index = nil
+
+    if selected_container_id then
+        for index, container in ipairs(current_containers) do
+            if container.id == selected_container_id then
+                selected_index = index
+
+                break
+            end
+        end
+    end
+
+    selected_index = selected_index or math.min(
+        current_index,
+        #current_containers
+    )
+
+    vim.api.nvim_win_set_cursor(
+        windows.containers,
+        { selected_index + 1, 0 }
+    )
+end
+
 ---@param mode "docker"|"compose"
 ---@param containers DockerContainer[]
 ---@param handlers DockerUIHandlers|nil
@@ -528,6 +599,10 @@ end
 function UI.open(mode, containers, handlers)
     UI.close()
 
+    previous_guicursor = vim.o.guicursor
+    vim.o.guicursor = "n-v-c:ver25,i-ci-ve:ver25,r-cr:hor20,o:hor50"
+
+    current_mode = mode
     current_containers = containers
     current_handlers = handlers or {}
 
